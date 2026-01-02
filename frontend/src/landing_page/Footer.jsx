@@ -103,7 +103,7 @@ export default function Footer() {
       </div>
 
       <div style={{ color: '#888', fontSize: 15, textAlign: 'center', padding: '18px 24px 8px 24px', letterSpacing: 0.01 }}>
-          © 2023-2025 StockSathi. All rights reserved.
+          © 2026 StockSathi.
         </div>
 
       {/* FontAwesome CDN for icons (if not already included globally) */}
