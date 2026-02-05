@@ -1,5 +1,5 @@
 # Stock Trading Platform  
-A Full-Stack Real-Time Trading Platform Built with the MERN Stack_
+*A full-stack, real-time trading platform built with the MERN stack.*
 
 A modern, scalable stock trading platform designed to provide a seamless trading experience for users — from market tracking to portfolio management.  
 Developed as part of a **Software Engineering Project**, this platform merges real-time data visualization, secure authentication, and an interactive dashboard within a single unified interface.
@@ -27,6 +27,18 @@ Developed as part of a **Software Engineering Project**, this platform merges re
 
 The **Stock Trading Platform** is a full-stack MERN web application that enables users to register, view live stock data, manage portfolios, track performance, and simulate trades.  
 It combines a **beautiful frontend**, **real-time analytics**, and a **secure backend** built for scalability.
+
+### Preview
+
+> 📸 The screenshots below are placeholders. Replace the files under `docs/images/` with your own assets or real application screenshots.
+
+| Landing Page | Authentication Flow |
+|-------------|---------------------|
+| ![Landing Page](docs/images/landing-page.png) | ![Auth Flow](docs/images/auth-flow.png) |
+
+| Trading Dashboard | Portfolio & Analytics |
+|-------------------|-----------------------|
+| ![Trading Dashboard](docs/images/trading-dashboard.png) | ![Portfolio Analytics](docs/images/portfolio-analytics.png) |
 
 ### Key Highlights
 - **Real-Time Stock Data**: Integrated with APIs for live updates  
@@ -159,72 +171,84 @@ The platform uses CSS custom properties for theme management:
 ### Prerequisites
 - Node.js ≥ 18  
 - npm or yarn  
-- MongoDB (local or Atlas instance)
+- MongoDB (local instance or MongoDB Atlas)
 
 ### Setup
 
-```bash
 1. **Clone the repository**
-   ```bash
-   git clone <repository-url>
-   cd Stock-Trading-Platform
-   ```
 
-2. **Install Backend Dependencies**
-   ```bash
-   cd backend
-   npm install
-   ```
+```bash
+git clone <repository-url>
+cd Stock-Trading-Platform
+```
 
-3. **Install Frontend Dependencies**
-   ```bash
-   cd ../frontend
-   npm install
-   ```
+2. **Install backend dependencies**
 
-4. **Install Dashboard Dependencies**
-   ```bash
-   cd ../dashboard
-   npm install
-   ```
+```bash
+cd backend
+npm install
+```
 
-5. **Set up Environment Variables**
-   
-   Create a `.env` file in the `backend` directory:
-   ```env
-   PORT=3000
-   MONGO_URL=your_mongodb_connection_string
-   JWT_SECRET=your_jwt_secret_key
-   FRONTEND_URL=http://localhost:5173
-   DASHBOARD_URL=http://localhost:5174
-   GOOGLE_CLIENT_ID=your_google_client_id
-   GOOGLE_CLIENT_SECRET=your_google_client_secret
+3. **Install frontend dependencies**
 
-6. **Start the Backend Server**
-   ```bash
-   cd backend
-   npm run dev
-   ```
-   The backend will run on `http://localhost:3000`
+```bash
+cd ../frontend
+npm install
+```
 
-7. **Start the Frontend (Landing Page)**
-   ```bash
-   cd frontend
-   npm run dev
-   ```
-   The frontend will run on `http://localhost:5173`
+4. **Install dashboard dependencies**
 
-8. **Start the Dashboard**
-   ```bash
-   cd dashboard
-   npm run dev
-   ```
-   The dashboard will run on `http://localhost:5174`
+```bash
+cd ../dashboard
+npm install
+```
+
+5. **Configure environment variables**
+
+Create a `.env` file in the `backend` directory:
+
+```env
+PORT=3000
+MONGO_URL=your_mongodb_connection_string
+JWT_SECRET=your_jwt_secret_key
+FRONTEND_URL=http://localhost:5173
+DASHBOARD_URL=http://localhost:5174
+GOOGLE_CLIENT_ID=your_google_client_id
+GOOGLE_CLIENT_SECRET=your_google_client_secret
+```
+
+6. **Start the backend server**
+
+```bash
+cd backend
+npm run dev
+```
+
+The backend will run on `http://localhost:3000`.
+
+7. **Start the frontend (landing page)**
+
+```bash
+cd frontend
+npm run dev
+```
+
+The frontend will run on `http://localhost:5173`.
+
+8. **Start the dashboard**
+
+```bash
+cd dashboard
+npm run dev
+```
+
+The dashboard will run on `http://localhost:5174`.
 
 Your app will be live at:
-- Frontend: http://localhost:5173 
-- Dashboard: http://localhost:5174 
-- Backend: http://localhost:3000  
+
+- Frontend: `http://localhost:5173`  
+- Dashboard: `http://localhost:5174`  
+- Backend: `http://localhost:3000`  
 
 ---
 
@@ -331,19 +355,13 @@ To contribute:
 
 ---
 
-## License
-
-This project is licensed under the **MIT License** — feel free to use and modify it for educational purposes.
-
----
-
 ## Contact
 
 **Developed by:** Gaurav Jain  
 **Email:** [jaingaurav906@gmail.com](mailto:jaingaurav906@gmail.com)  
-**LinkedIn:** [linkedin.com/in/this-is-gaurav-jain/](https://www.linkedin.com/in/this-is-gaurav-jain/)  
-**GitHub:** [github.com/gauravjain0377](https://github.com/gauravjain0377)  
-**𝕏:** [x.com/gauravjain0377](https://x.com/gauravjain0377)
+**LinkedIn:** [this-is-gaurav-jain/](https://www.linkedin.com/in/this-is-gaurav-jain/)  
+**GitHub:** [gauravjain0377](https://github.com/gauravjain0377)  
+**𝕏:** [gauravjain0377](https://x.com/gauravjain0377)
 
 ---
 
