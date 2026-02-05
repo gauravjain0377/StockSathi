@@ -10,6 +10,7 @@ Developed as part of a **Software Engineering Project**, this platform merges re
 
 - [Overview](#overview)
 - [Features](#features)
+- [Dashboard & Analytics](#dashboard--analytics)
 - [Tech Stack](#tech-stack)
 - [Project Structure](#project-structure)
 - [Color Palette](#color-palette)
@@ -30,15 +31,13 @@ It combines a **beautiful frontend**, **real-time analytics**, and a **secure ba
 
 ### Preview
 
-> 📸 The screenshots below are placeholders. Replace the files under `docs/images/` with your own assets or real application screenshots.
+**Landing Page**
 
-| Landing Page | Authentication Flow |
-|-------------|---------------------|
-| ![Landing Page](docs/images/landing-page.png) | ![Auth Flow](docs/images/auth-flow.png) |
+![Landing Page](docs/images/landing-page.png)
 
-| Trading Dashboard | Portfolio & Analytics |
-|-------------------|-----------------------|
-| ![Trading Dashboard](docs/images/trading-dashboard.png) | ![Portfolio Analytics](docs/images/portfolio-analytics.png) |
+**Authentication Flow**
+
+![Auth Flow](docs/images/auth-flow.png)
 
 ### Key Highlights
 - **Real-Time Stock Data**: Integrated with APIs for live updates  
@@ -66,6 +65,20 @@ It combines a **beautiful frontend**, **real-time analytics**, and a **secure ba
 - User, Stock, Order, and Portfolio models  
 - Secure API endpoints with middleware validation  
 - Integration-ready for stock data APIs (e.g., Yahoo Finance)  
+
+---
+
+## Dashboard & Analytics
+
+The trading dashboard and portfolio analytics provide real-time market data, interactive charts, and comprehensive performance tracking.
+
+**Trading Dashboard**
+
+![Trading Dashboard](docs/images/trading-dashboard.png)
+
+**Portfolio & Analytics**
+
+![Portfolio Analytics](docs/images/portfolio-analytics.png)
 
 ---
 
