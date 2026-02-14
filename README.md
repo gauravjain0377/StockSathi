@@ -62,9 +62,10 @@ It combines a **beautiful frontend**, **real-time analytics**, and a **secure ba
 - Express.js RESTful APIs  
 - MongoDB with Mongoose for data persistence  
 - JWT authentication and password hashing using bcrypt  
+- **Brevo (email)**: Transactional email (verification, password reset) — 300 emails/day free, sends to any address  
 - User, Stock, Order, and Portfolio models  
 - Secure API endpoints with middleware validation  
-- Integration-ready for stock data APIs (e.g., Yahoo Finance)  
+- Yahoo Finance integration with **batch quote** (single request for all symbols) to avoid rate limits (429)  
 
 ---
 
@@ -90,6 +91,8 @@ The trading dashboard and portfolio analytics provide real-time market data, int
 | **Dashboard** | Integrated into `frontend/` (React components + Chart.js + Socket.io client) |
 | **Backend** | Node.js, Express.js, MongoDB, Mongoose, JWT, Bcrypt, Socket.io |
 | **Database** | MongoDB Atlas |
+| **Email** | Brevo (transactional: verification, password reset; 300/day free) |
+| **Stock Data** | Yahoo Finance via `yahoo-finance2` (batch quote to avoid rate limits) |
 | **Version Control** | Git & GitHub |
 | **Tools** | VS Code, Postman, npm |
 
@@ -223,12 +226,33 @@ Create a `.env` file in the `backend` directory:
 ```env
 PORT=3000
 MONGO_URL=your_mongodb_connection_string
-JWT_SECRET=your_jwt_secret_key
+TOKEN_KEY=your_jwt_secret_key
+
+# Frontend URLs (for CORS and redirects)
 FRONTEND_URL=http://localhost:5173
 DASHBOARD_URL=http://localhost:5174
+
+# Google OAuth (optional)
 GOOGLE_CLIENT_ID=your_google_client_id
 GOOGLE_CLIENT_SECRET=your_google_client_secret
+GOOGLE_CALLBACK_URL=http://localhost:3000/auth/google/callback
+SESSION_SECRET=your_session_secret
+
+# Email – Brevo (transactional email: verification, password reset, etc.)
+BREVO_API_KEY=your_brevo_api_key
+BREVO_SENDER_EMAIL=your_verified_sender@example.com
+EMAIL_FROM_NAME=StockSathi Support
 ```
+
+**Brevo (email)**  
+The app uses [Brevo](https://www.brevo.com/) (formerly Sendinblue) for transactional emails: signup verification, password reset, and support. Brevo can send to **any** recipient email (unlike some providers that restrict to the account owner).
+
+- **Free tier**: 300 emails/day.
+- **Setup**: Sign up at [app.brevo.com](https://app.brevo.com) → **SMTP & API** → **API Keys** → create a key. Add it as `BREVO_API_KEY`.
+- **Sender**: Set `BREVO_SENDER_EMAIL` to a verified sender (e.g. your Gmail). Verify the sender in Brevo’s **Senders & IP**.
+- **Optional**: `EMAIL_FROM_NAME` is the “From” name (default: `StockSathi Support`).
+
+If Brevo is not configured, the server still starts; email-dependent flows (e.g. verification links) will fail until you add the keys.
 
 6. **Start the backend server**
 
@@ -267,7 +291,14 @@ Your app will be live at:
 
 ## Version History
 
-### Version 3.0 (Current)
+### Version 3.1 (Current)
+- **Email – Brevo**: Transactional email via [Brevo](https://www.brevo.com/) (verification, password reset, support). Free tier 300 emails/day; sends to any address. Configure `BREVO_API_KEY` and `BREVO_SENDER_EMAIL` in backend `.env`.
+- **Yahoo Finance rate limit fix**: Live stock data now uses a **single batch request** for all symbols (`yahooFinance.quote(symbols, { return: 'array' })`) instead of many separate requests. This avoids Yahoo’s 429 “Failed to get crumb” errors.
+- **Update interval**: Live stock refresh increased from 30s to **60s** to stay under Yahoo’s rate limits.
+- **Retry with backoff**: Batch quote and `getStocksData` retry on 429 with exponential backoff (5s → 10s → 20s).
+- **API `getStocksData`**: Fetches multiple symbols in one Yahoo quote call instead of per-symbol requests.
+
+### Version 3.0
 - **Enhanced Real-time Features**: Improved WebSocket performance and reliability
 - **Advanced Analytics**: New portfolio analytics dashboard with visualizations
 - **Mobile Optimization**: Enhanced mobile experience with responsive sidebar

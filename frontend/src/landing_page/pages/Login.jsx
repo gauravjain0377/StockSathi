@@ -14,6 +14,7 @@ const Login = () => {
   const [password, setPassword] = useState("");
   const [errorMsg, setErrorMsg] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
   const { login } = useAuth();
@@ -29,6 +30,7 @@ const Login = () => {
   const handleLogin = async (e) => {
     e.preventDefault();
     setErrorMsg("");
+    setIsLoading(true);
 
     // Debug: Log what we're sending
     console.log("📤 Sending login request:", { email, password: password ? "***" : "undefined" });
@@ -155,6 +157,8 @@ const Login = () => {
       console.error("Error status:", err.response?.status);
       console.error("Full error object:", JSON.stringify(err, null, 2));
       setErrorMsg(err.response?.data?.message || "Login failed. Please try again.");
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -246,7 +250,35 @@ const Login = () => {
               <div style={{ textAlign: 'right', marginBottom: 18 }}>
                 <Link to="/password-reset" style={{ color: ACCENT, fontWeight: 500, fontSize: 14, textDecoration: 'none' }}>Forgot your password?</Link>
               </div>
-              <button type="submit" style={{ width: '100%', background: ACCENT, color: 'white', fontWeight: 700, fontSize: 18, border: 'none', borderRadius: 22, padding: '12px 0', marginBottom: 8, boxShadow: '0 2px 8px rgba(25,195,125,0.10)', cursor: 'pointer', transition: 'background 0.18s' }}>SIGN IN</button>
+              <button
+                type="submit"
+                disabled={isLoading}
+                style={{
+                  width: '100%',
+                  background: ACCENT,
+                  color: 'white',
+                  fontWeight: 700,
+                  fontSize: 18,
+                  border: 'none',
+                  borderRadius: 22,
+                  padding: '12px 0',
+                  marginBottom: 8,
+                  boxShadow: '0 2px 8px rgba(25,195,125,0.10)',
+                  cursor: isLoading ? 'not-allowed' : 'pointer',
+                  transition: 'background 0.18s',
+                  opacity: isLoading ? 0.9 : 1
+                }}
+                className={isLoading ? 'auth-btn-loading' : ''}
+              >
+                {isLoading ? (
+                  <>
+                    <span className="auth-btn-spinner" />
+                    <span>Signing in...</span>
+                  </>
+                ) : (
+                  'SIGN IN'
+                )}
+              </button>
               <div style={{ textAlign: 'center', marginTop: 16 }}>
                 <span style={{ color: '#666', fontSize: 15 }}>Don't have an account? </span>
                 <Link to="/signup" style={{ color: ACCENT, fontWeight: 600, fontSize: 15, textDecoration: 'none' }}>Sign up</Link>

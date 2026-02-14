@@ -17,6 +17,7 @@ const Signup = () => {
   });
   const [errorMsg, setErrorMsg] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
   const { login } = useAuth();
@@ -39,6 +40,7 @@ const Signup = () => {
   const handleRegister = async (e) => {
     e.preventDefault();
     setErrorMsg("");
+    setIsLoading(true);
 
     try {
       const res = await axios.post(`${API_URL}/api/users/register`, {
@@ -108,6 +110,8 @@ const Signup = () => {
     } catch (err) {
       console.error("Registration error:", err);
       setErrorMsg(err.response?.data?.message || "Registration failed. Please try again.");
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -198,7 +202,35 @@ const Signup = () => {
                   </button>
                 </div>
               </div>
-              <button type="submit" style={{ width: '100%', background: ACCENT, color: 'white', fontWeight: 700, fontSize: 18, border: 'none', borderRadius: 22, padding: '12px 0', marginBottom: 8, boxShadow: '0 2px 8px rgba(25,195,125,0.10)', cursor: 'pointer', transition: 'background 0.18s' }}>CREATE ACCOUNT</button>
+              <button
+                type="submit"
+                disabled={isLoading}
+                style={{
+                  width: '100%',
+                  background: ACCENT,
+                  color: 'white',
+                  fontWeight: 700,
+                  fontSize: 18,
+                  border: 'none',
+                  borderRadius: 22,
+                  padding: '12px 0',
+                  marginBottom: 8,
+                  boxShadow: '0 2px 8px rgba(25,195,125,0.10)',
+                  cursor: isLoading ? 'not-allowed' : 'pointer',
+                  transition: 'background 0.18s',
+                  opacity: isLoading ? 0.9 : 1
+                }}
+                className={isLoading ? 'auth-btn-loading' : ''}
+              >
+                {isLoading ? (
+                  <>
+                    <span className="auth-btn-spinner" />
+                    <span>Creating account...</span>
+                  </>
+                ) : (
+                  'CREATE ACCOUNT'
+                )}
+              </button>
               <div style={{ textAlign: 'center', marginTop: 16 }}>
                 <span style={{ color: '#666', fontSize: 15 }}>Already have an account? </span>
                 <Link to="/login" style={{ color: ACCENT, fontWeight: 600, fontSize: 15, textDecoration: 'none' }}>Sign in</Link>
