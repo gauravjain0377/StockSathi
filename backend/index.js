@@ -27,6 +27,13 @@ const PORT = process.env.PORT || 3000;
 const uri = process.env.MONGO_URL || "mongodb://localhost:27017/test";
 const NODE_ENV = process.env.NODE_ENV || 'development';
 
+// Case-insensitive email lookup (emails are case-insensitive per RFC)
+const findUserByEmail = (email) => {
+  if (!email || !email.trim()) return null;
+  const escaped = String(email).trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return UserModel.findOne({ email: { $regex: new RegExp(`^${escaped}$`, 'i') } });
+};
+
 // Allowed origins for CORS
 const allowedOrigins = [
   'http://localhost:5173',
@@ -622,7 +629,7 @@ app.get("/api/test", (req, res) => {
   res.json({ message: "Backend is running!" });
 });
 
-// Health check endpoint
+// Health check + email debug (http://localhost:3000/api/health)
 app.get("/api/health", (req, res) => {
   res.json({ 
     status: "OK", 
@@ -630,40 +637,25 @@ app.get("/api/health", (req, res) => {
     clientsConnected: connectedClients,
     stocksTracked: currentStockData.size,
     environment: process.env.NODE_ENV || 'development',
-    emailService: {
-      initialized: emailService.isInitialized,
-      hasApiKey: !!emailService.apiKey,
-      apiKeyPrefix: emailService.apiKey ? emailService.apiKey.substring(0, 10) + '...' : 'missing',
-      method: 'REST API',
-      fromEmail: 'onboarding@resend.dev',
-      supportTo: process.env.SUPPORT_TO || 'gjain0229@gmail.com'
+    email: {
+      ready: emailService.isInitialized && emailService.apiKey,
+      provider: 'Brevo',
+      sender: emailService.senderEmail || process.env.BREVO_SENDER_EMAIL,
+      BREVO_API_KEY_set: !!process.env.BREVO_API_KEY,
+      BREVO_SENDER_EMAIL_set: !!(process.env.BREVO_SENDER_EMAIL || process.env.EMAIL_FROM),
+      hint: !process.env.BREVO_API_KEY ? 'Add BREVO_API_KEY + BREVO_SENDER_EMAIL to .env' : null
     }
   });
 });
 
-// Email service diagnostic endpoint
-app.get("/api/email/status", (req, res) => {
+// Email debug - same info (http://localhost:3000/api/email/debug)
+app.get(["/api/email/debug", "/api/emaildebug"], (req, res) => {
   res.json({
-    emailService: {
-      initialized: emailService.isInitialized,
-      hasApiKey: !!emailService.apiKey,
-      provider: 'Resend',
-      method: 'REST API',
-      configuration: {
-        hasApiKey: !!emailService.apiKey,
-        apiKeyLength: emailService.apiKey?.length || 0,
-        apiKeyPrefix: emailService.apiKey ? emailService.apiKey.substring(0, 10) + '...' : 'missing',
-        apiKeyValid: emailService.apiKey?.startsWith('re_') || false,
-        fromEmail: 'onboarding@resend.dev',
-        fromName: process.env.EMAIL_FROM_NAME || 'StockSathi Support',
-        supportTo: process.env.SUPPORT_TO || 'gjain0229@gmail.com',
-        nodeEnv: process.env.NODE_ENV || 'development'
-      },
-      status: emailService.isInitialized && emailService.apiKey ? 'ready' : 'not_configured',
-      message: emailService.isInitialized && emailService.apiKey 
-        ? 'Email service is ready to send emails via REST API'
-        : 'Email service not configured. Please check RESEND_API_KEY environment variable.'
-    }
+    emailReady: emailService.isInitialized && emailService.apiKey,
+    provider: 'Brevo',
+    BREVO_API_KEY_set: !!process.env.BREVO_API_KEY,
+    BREVO_SENDER_EMAIL: process.env.BREVO_SENDER_EMAIL || process.env.EMAIL_FROM || 'gjain0229@gmail.com',
+    setup: '1. Get API key: app.brevo.com → SMTP & API → API Keys. 2. Add sender: Senders & IP → verify gjain0229@gmail.com. 3. Add to .env: BREVO_API_KEY, BREVO_SENDER_EMAIL'
   });
 });
 
@@ -990,20 +982,27 @@ app.post("/api/users/register", async (req, res) => {
     newUser.emailVerificationExpires = expiresAt;
     await newUser.save();
     
-    // Send verification email using Resend
+    // Send verification email using Resend (recipient = the user's email)
+    console.log('[REGISTER] Email check:', { initialized: emailService.isInitialized, hasKey: !!emailService.apiKey, recipient: newUser.email });
     if (emailService.isInitialized && emailService.apiKey) {
       try {
-        await emailService.sendVerificationEmail({
-          email: newUser.email,
-          verificationCode: verificationCode,
-          isWelcome: true
-        });
-        console.log('✅ Verification email sent to:', newUser.email);
+        const recipientEmail = (newUser.email || '').trim();
+        if (!recipientEmail) {
+          console.error('[REGISTER] ❌ Cannot send: user email is empty');
+        } else {
+          await emailService.sendVerificationEmail({
+            email: recipientEmail,
+            verificationCode: verificationCode,
+            isWelcome: true
+          });
+          console.log('[REGISTER] ✅ Verification email sent to:', recipientEmail);
+        }
       } catch (emailError) {
-        console.error('❌ Failed to send verification email:', emailError);
+        console.error('[REGISTER] ❌ Failed to send verification email:', emailError?.message || emailError);
+        console.error('[REGISTER] Full error:', emailError);
       }
     } else {
-      console.warn('⚠️ Email service not configured. Verification email not sent.');
+      console.warn('[REGISTER] ⚠️ Email NOT configured. Add BREVO_API_KEY + BREVO_SENDER_EMAIL to .env');
     }
     
     res.json({ 
@@ -1107,15 +1106,17 @@ app.post("/api/users/login", async (req, res) => {
 app.post('/api/users/send-verification-code', async (req, res) => {
   try {
     const { email } = req.body;
-    
-    // Validate email
-    if (!email) {
-      return res.status(400).json({ success: false, message: 'Email is required' });
+    const recipientEmail = (email || '').trim();
+    console.log('[SEND-VERIFY] Request:', { emailFromBody: email, recipientEmail });
+
+    if (!recipientEmail || !recipientEmail.includes('@')) {
+      console.log('[SEND-VERIFY] ❌ Invalid email');
+      return res.status(400).json({ success: false, message: 'Valid email is required' });
     }
-    
-    // Check if user exists
-    const user = await UserModel.findOne({ email });
+
+    const user = await findUserByEmail(recipientEmail);
     if (!user) {
+      console.log('[SEND-VERIFY] ❌ User not found for:', recipientEmail);
       return res.status(404).json({ success: false, message: 'User not found' });
     }
     
@@ -1130,24 +1131,24 @@ app.post('/api/users/send-verification-code', async (req, res) => {
     
     // Send email with verification code using Resend
     if (!emailService.isInitialized || !emailService.apiKey) {
-      return res.status(500).json({ success: false, message: 'Email service is not configured on server' });
+      return res.status(500).json({ success: false, message: 'Email not configured. Add BREVO_API_KEY to .env' });
     }
     
     try {
       await emailService.sendVerificationEmail({
-        email: email,
+        email: user.email,
         verificationCode: verificationCode,
         isWelcome: false
       });
-      console.log('✅ Verification code sent to:', email);
+      console.log('[SEND-VERIFY] ✅ Sent to:', user.email);
     } catch (emailError) {
-      console.error('❌ Failed to send verification email:', emailError);
+      console.error('[SEND-VERIFY] ❌ Email send failed:', emailError?.message || emailError);
       return res.status(500).json({ success: false, message: 'Failed to send verification email' });
     }
-    
+
     res.json({ success: true, message: 'Verification code sent to your email' });
   } catch (err) {
-    console.error('❌ Error sending verification code:', err);
+    console.error('[SEND-VERIFY] ❌ Error:', err);
     res.status(500).json({ success: false, message: 'Failed to send verification code' });
   }
 });
@@ -1156,14 +1157,10 @@ app.post('/api/users/send-verification-code', async (req, res) => {
 app.post('/api/users/verify-email', async (req, res) => {
   try {
     const { email, code } = req.body;
-    
-    // Validate input
     if (!email || !code) {
       return res.status(400).json({ success: false, message: 'Email and code are required' });
     }
-    
-    // Find user
-    const user = await UserModel.findOne({ email });
+    const user = await findUserByEmail(email);
     if (!user) {
       return res.status(404).json({ success: false, message: 'User not found' });
     }
@@ -1194,14 +1191,14 @@ app.post('/api/users/verify-email', async (req, res) => {
 app.post('/api/users/send-password-reset-code', async (req, res) => {
   try {
     const { email } = req.body;
-    
-    // Validate email
-    if (!email) {
-      return res.status(400).json({ success: false, message: 'Email is required' });
+    const recipientEmail = (email || '').trim();
+    console.log('[PWD-RESET] Request:', { recipientEmail });
+
+    if (!recipientEmail || !recipientEmail.includes('@')) {
+      return res.status(400).json({ success: false, message: 'Valid email is required' });
     }
-    
-    // Check if user exists
-    const user = await UserModel.findOne({ email });
+
+    const user = await findUserByEmail(recipientEmail);
     if (!user) {
       // For security, we don't reveal if the email exists or not
       return res.json({ success: true, message: 'If the email exists, a reset code has been sent' });
@@ -1218,17 +1215,17 @@ app.post('/api/users/send-password-reset-code', async (req, res) => {
     
     // Send email with reset code using Resend
     if (!emailService.isInitialized || !emailService.apiKey) {
-      return res.status(500).json({ success: false, message: 'Email service is not configured on server' });
+      return res.status(500).json({ success: false, message: 'Email not configured. Add BREVO_API_KEY to .env' });
     }
     
     try {
       await emailService.sendPasswordResetEmail({
-        email: email,
+        email: user.email,
         resetCode: resetCode
       });
-      console.log('✅ Password reset code sent to:', email);
+      console.log('[PWD-RESET] ✅ Sent to:', user.email);
     } catch (emailError) {
-      console.error('❌ Failed to send password reset email:', emailError);
+      console.error('[PWD-RESET] ❌ Email send failed:', emailError?.message || emailError);
       return res.status(500).json({ success: false, message: 'Failed to send password reset email' });
     }
     
@@ -1254,8 +1251,7 @@ app.post('/api/users/reset-password', async (req, res) => {
       return res.status(400).json({ success: false, message: 'Password must be at least 6 characters long' });
     }
     
-    // Find user
-    const user = await UserModel.findOne({ email });
+    const user = await findUserByEmail(email);
     if (!user) {
       return res.status(404).json({ success: false, message: 'User not found' });
     }
@@ -1695,7 +1691,7 @@ app.post('/api/support/contact', async (req, res) => {
 
     // Check if email service is configured
     if (!emailService.isInitialized || !emailService.apiKey) {
-      console.error('❌ Email service not configured. Please check RESEND_API_KEY environment variable.');
+      console.error('❌ Email not configured. Add BREVO_API_KEY and BREVO_SENDER_EMAIL to .env');
       return res.status(500).json({ 
         success: false, 
         message: 'Email service is not configured on the server. Please contact support directly at gjain0229@gmail.com' 
@@ -1852,145 +1848,81 @@ let connectedClients = 0;
 // Helper function to delay execution
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-// Helper function to fetch a single stock with retry logic
-async function fetchStockWithRetry(symbol, maxRetries = 3, baseDelay = 1000) {
+// Map a single Yahoo quote result to our stock format
+function mapQuoteToStock(data) {
+  if (!data) return null;
+  const symbol = data.symbol || '';
+  const previousClose = data?.regularMarketPreviousClose || null;
+  const regularMarketPrice = data?.regularMarketPrice || data?.currentPrice || null;
+  if (!regularMarketPrice) return null;
+  const lowerCircuit = previousClose ? Number((previousClose * 0.95).toFixed(2)) : null;
+  const upperCircuit = previousClose ? Number((previousClose * 1.05).toFixed(2)) : null;
+  let displaySymbol = symbol.replace('.NS', '');
+  if (symbol === '^NSEI') displaySymbol = 'NIFTY 50';
+  else if (symbol === '^BSESN') displaySymbol = 'SENSEX';
+  return {
+    symbol: displaySymbol,
+    name: data?.shortName || displaySymbol,
+    price: regularMarketPrice,
+    change: data?.regularMarketChange ?? null,
+    percentChange: data?.regularMarketChangePercent ?? null,
+    previousClose,
+    lowerCircuit,
+    upperCircuit,
+    volume: data?.regularMarketVolume ?? null,
+    marketCap: data?.marketCap ?? null,
+    lastUpdate: new Date().toISOString()
+  };
+}
+
+// Fetch live stock data using ONE batch request (avoids Yahoo 429 rate limit)
+async function fetchLiveStockData() {
+  const maxRetries = 3;
+  const baseDelay = 5000; // 5s initial backoff for rate limit
+
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      const data = await yahooFinance.quote(symbol);
-      
-      // Check if data is valid
-      if (!data) {
-        console.warn(`⚠️  Skipping ${symbol}: No data returned`);
-        return null;
+      console.log(`Fetching live stock data for ${stockSymbols.length} symbols (attempt ${attempt}/${maxRetries})`);
+      // Single HTTP request for all symbols - avoids "Failed to get crumb" 429 from Yahoo
+      const results = await yahooFinance.quote(stockSymbols, { return: 'array' });
+      if (!results || !Array.isArray(results)) {
+        throw new Error('Invalid quote response');
       }
-      
-      // Safely extract data with fallbacks
-      const previousClose = data?.regularMarketPreviousClose || null;
-      const regularMarketPrice = data?.regularMarketPrice || data?.currentPrice || null;
-      const regularMarketChange = data?.regularMarketChange || null;
-      const regularMarketChangePercent = data?.regularMarketChangePercent || null;
-      
-      // Skip stocks with missing critical data
-      if (!regularMarketPrice) {
-        console.warn(`⚠️  Skipping ${symbol}: Missing price data`);
-        return null;
+      const validResults = results.map(mapQuoteToStock).filter(Boolean);
+
+      // Update current data and emit changes
+      if (validResults.length > 0) {
+        validResults.forEach(stock => {
+          currentStockData.set(stock.symbol, stock);
+          io.emit('stockUpdate', stock);
+        });
+        io.emit('bulkStockUpdate', validResults);
+        console.log(`✅ Updated ${validResults.length}/${stockSymbols.length} stocks at ${new Date().toLocaleTimeString()}`);
+        return;
       }
-      
-      // Only calculate circuits if previousClose exists and is not zero
-      const lowerCircuit = previousClose ? Number((previousClose * 0.95).toFixed(2)) : null;
-      const upperCircuit = previousClose ? Number((previousClose * 1.05).toFixed(2)) : null;
-      
-      // Handle index symbols
-      let displaySymbol = symbol.replace('.NS', '');
-      if (symbol === '^NSEI') {
-        displaySymbol = 'NIFTY 50';
-      } else if (symbol === '^BSESN') {
-        displaySymbol = 'SENSEX';
-      }
-      
-      return {
-        symbol: displaySymbol,
-        name: data?.shortName || displaySymbol,
-        price: regularMarketPrice,
-        change: regularMarketChange,
-        percentChange: regularMarketChangePercent,
-        previousClose: previousClose,
-        lowerCircuit: lowerCircuit,
-        upperCircuit: upperCircuit,
-        volume: data?.regularMarketVolume || null,
-        marketCap: data?.marketCap || null,
-        lastUpdate: new Date().toISOString()
-      };
+      console.warn('⚠️  No valid results in quote response');
     } catch (error) {
-      // Check if it's a rate limit error (429)
-      const isRateLimit = error.message?.includes('429') || 
+      const isRateLimit = error.message?.includes('429') ||
                          error.message?.includes('Too Many Requests') ||
                          error.message?.includes('crumb') ||
                          error.status === 429 ||
                          error.code === 429;
-      
       if (isRateLimit && attempt < maxRetries) {
-        // Exponential backoff with jitter for rate limit errors
-        const backoffDelay = baseDelay * Math.pow(2, attempt - 1) + Math.random() * 1000;
-        console.warn(`Rate limit hit for ${symbol}, retrying in ${Math.round(backoffDelay)}ms (attempt ${attempt}/${maxRetries})`);
+        const backoffDelay = baseDelay * Math.pow(2, attempt - 1) + Math.random() * 2000;
+        console.warn(`Rate limit (429) on batch request, retrying in ${Math.round(backoffDelay)}ms (attempt ${attempt}/${maxRetries})`);
         await delay(backoffDelay);
         continue;
       }
-      
-      // For other errors or final retry, log and return null
-      if (attempt === maxRetries) {
-        console.error(`Error fetching data for ${symbol} after ${maxRetries} attempts:`, error.message);
-      }
-      return null;
+      console.error('❌ Error in fetchLiveStockData:', error.message);
+      break;
     }
   }
-  return null;
-}
 
-// Fetch live stock data with rate limiting
-async function fetchLiveStockData() {
-  try {
-    console.log('Fetching live stock data for', stockSymbols.length, 'symbols');
-    
-    const BATCH_SIZE = 5; // Process 5 symbols at a time
-    const DELAY_BETWEEN_BATCHES = 2000; // 2 seconds delay between batches
-    const validResults = [];
-    
-    // Process symbols in batches to avoid rate limiting
-    for (let i = 0; i < stockSymbols.length; i += BATCH_SIZE) {
-      const batch = stockSymbols.slice(i, i + BATCH_SIZE);
-      console.log(`Processing batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(stockSymbols.length / BATCH_SIZE)}: ${batch.length} symbols`);
-      
-      // Process batch in parallel
-      const batchResults = await Promise.allSettled(
-        batch.map(symbol => fetchStockWithRetry(symbol))
-      );
-      
-      // Extract valid results
-      const batchValid = batchResults
-        .filter(result => result.status === 'fulfilled' && result.value !== null)
-        .map(result => result.value);
-      
-      validResults.push(...batchValid);
-      
-      // Add delay between batches (except for the last batch)
-      if (i + BATCH_SIZE < stockSymbols.length) {
-        await delay(DELAY_BETWEEN_BATCHES);
-      }
-    }
-
-    // Update current data and emit changes
-    if (validResults.length > 0) {
-      validResults.forEach(stock => {
-        const previousData = currentStockData.get(stock.symbol);
-        currentStockData.set(stock.symbol, stock);
-        
-        // Emit individual stock update
-        io.emit('stockUpdate', stock);
-      });
-
-      // Emit bulk update
-      io.emit('bulkStockUpdate', validResults);
-      console.log(`✅ Updated ${validResults.length}/${stockSymbols.length} stocks at ${new Date().toLocaleTimeString()}`);
-    } else {
-      console.warn('⚠️  No valid stock data fetched in this cycle');
-      
-      // If we have previous data, emit it as fallback
-      if (currentStockData.size > 0) {
-        const fallbackData = Array.from(currentStockData.values());
-        io.emit('bulkStockUpdate', fallbackData);
-        console.log(`📦 Emitted ${fallbackData.length} cached stocks as fallback`);
-      }
-    }
-
-  } catch (error) {
-    console.error('❌ Error in fetchLiveStockData:', error.message);
-    // Emit fallback data if available
-    if (currentStockData.size > 0) {
-      const fallbackData = Array.from(currentStockData.values());
-      io.emit('bulkStockUpdate', fallbackData);
-      console.log(`📦 Emitted ${fallbackData.length} cached stocks as fallback due to error`);
-    }
+  // No new data: emit cached data if available
+  if (currentStockData.size > 0) {
+    const fallbackData = Array.from(currentStockData.values());
+    io.emit('bulkStockUpdate', fallbackData);
+    console.log(`📦 Emitted ${fallbackData.length} cached stocks as fallback`);
   }
 }
 
@@ -2040,9 +1972,8 @@ server.on('clientError', (error, socket) => {
   socket.end('HTTP/1.1 400 Bad Request\r\n\r\n');
 });
 
-// Start periodic updates - increased interval to account for batching (52 symbols / 5 per batch = ~11 batches * 2s = ~22s minimum)
-// Set to 30 seconds to give enough time for all batches and avoid rate limiting
-setInterval(fetchLiveStockData, 30000);
+// One batch request per cycle - 60s interval to stay under Yahoo's rate limit
+setInterval(fetchLiveStockData, 60000);
 
 // Initial data fetch
 fetchLiveStockData();
@@ -2053,18 +1984,11 @@ server.listen(PORT, () => {
   console.log("WebSocket server ready for real-time stock updates!");
   
   // Log email service status
-  console.log('\n📧 Email Service Status:');
+  console.log('\n📧 Email (Brevo):');
   if (emailService.isInitialized && emailService.apiKey) {
-    console.log('✅ Email service is initialized and ready');
-    console.log(`   Provider: Resend (REST API)`);
-    console.log(`   API Key: ${emailService.apiKey.substring(0, 10)}...`);
-    console.log(`   From: ${process.env.EMAIL_FROM_NAME || 'StockSathi Support'} <onboarding@resend.dev>`);
-    console.log(`   Support To: ${process.env.SUPPORT_TO || 'gjain0229@gmail.com'}`);
-    console.log(`   Method: REST API (fast and reliable on Render)`);
+    console.log('   ✅ Ready. Sends to ANY email. Sender:', emailService.senderEmail);
   } else {
-    console.log('❌ Email service is NOT initialized');
-    console.log('   ⚠️  RESEND_API_KEY environment variable is missing or invalid');
-    console.log('   📝 Emails will not be sent until this is configured');
+    console.log('   ❌ Not configured. Add BREVO_API_KEY + BREVO_SENDER_EMAIL to .env');
   }
   console.log('');
 });

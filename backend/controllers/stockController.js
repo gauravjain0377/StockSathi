@@ -38,87 +38,51 @@ exports.getStocksData = async (req, res) => {
     if (!symbols) {
       return res.status(400).json({ data: [], error: 'No symbols provided' });
     }
-    const symbolList = symbols.split(',').map(s => s.trim());
-    
-    // Helper function to delay execution
+    const symbolList = symbols.split(',').map(s => s.trim()).filter(Boolean);
+    if (symbolList.length === 0) {
+      return res.json({ data: [] });
+    }
+    // Normalize to Yahoo symbols (.NS for Indian stocks)
+    const yfSymbols = symbolList.map(s => /\.(NS|BSE)$/i.test(s) ? s : s + '.NS');
     const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-    
-    // Helper function to fetch a single stock with retry
-    const fetchStockWithRetry = async (symbol, maxRetries = 2) => {
-      for (let attempt = 1; attempt <= maxRetries; attempt++) {
-        try {
-          // Append .NS if not present for Indian stocks
-          const yfSymbol = /\.(NS|BSE)$/i.test(symbol) ? symbol : symbol + '.NS';
-          const data = await yahooFinance.quote(yfSymbol);
-          
-          // Check if data is valid
-          if (!data) {
-            console.warn(`⚠️  No data returned for ${yfSymbol}`);
-            return { symbol, error: 'No data returned' };
-          }
-          
-          // Calculate lower and upper circuit limits (5% from previous close)
+    const maxRetries = 2;
+    const baseDelay = 3000;
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        // Single batch request for all symbols - avoids Yahoo 429 rate limit
+        const quoteResults = await yahooFinance.quote(yfSymbols, { return: 'array' });
+        if (!quoteResults || !Array.isArray(quoteResults)) {
+          throw new Error('Invalid quote response');
+        }
+        const results = quoteResults.map((data) => {
+          if (!data || data.regularMarketPrice == null) return { symbol: data?.symbol?.replace('.NS', '') || '', error: 'No data' };
           const previousClose = data.regularMarketPreviousClose || 0;
-          const lowerCircuit = previousClose ? Number((previousClose * 0.95).toFixed(2)) : null;
-          const upperCircuit = previousClose ? Number((previousClose * 1.05).toFixed(2)) : null;
-          
+          const baseSymbol = (data.symbol || '').replace('.NS', '');
           return {
-            symbol: symbol, // base symbol for matching
+            symbol: baseSymbol,
             name: data.shortName,
             price: data.regularMarketPrice,
             percentChange: data.regularMarketChangePercent,
             previousClose: previousClose || null,
-            lowerCircuit: lowerCircuit,
-            upperCircuit: upperCircuit,
+            lowerCircuit: previousClose ? Number((previousClose * 0.95).toFixed(2)) : null,
+            upperCircuit: previousClose ? Number((previousClose * 1.05).toFixed(2)) : null,
             volume: data.regularMarketVolume,
             marketCap: data.marketCap || null,
           };
-        } catch (err) {
-          const isRateLimit = err.message?.includes('429') || 
-                             err.message?.includes('Too Many Requests') ||
-                             err.message?.includes('crumb') ||
-                             err.status === 429 ||
-                             err.code === 429;
-          
-          if (isRateLimit && attempt < maxRetries) {
-            const backoffDelay = 1000 * attempt + Math.random() * 500;
-            console.warn(`Rate limit hit for ${symbol}, retrying in ${Math.round(backoffDelay)}ms`);
-            await delay(backoffDelay);
-            continue;
-          }
-          
-          console.error(`Error fetching data for ${symbol}:`, err.message);
-          return { symbol, error: 'Not found or unavailable' };
+        });
+        return res.json({ data: results });
+      } catch (err) {
+        const isRateLimit = err.message?.includes('429') || err.message?.includes('Too Many Requests') || err.message?.includes('crumb') || err.status === 429 || err.code === 429;
+        if (isRateLimit && attempt < maxRetries) {
+          const backoff = baseDelay * Math.pow(2, attempt - 1) + Math.random() * 1000;
+          console.warn(`getStocksData rate limit, retrying in ${Math.round(backoff)}ms`);
+          await delay(backoff);
+          continue;
         }
-      }
-      return { symbol, error: 'Failed after retries' };
-    };
-    
-    // Process symbols in batches to avoid rate limiting
-    const BATCH_SIZE = 3; // Smaller batches for API endpoint
-    const DELAY_BETWEEN_BATCHES = 1500; // 1.5 seconds
-    const results = [];
-    
-    for (let i = 0; i < symbolList.length; i += BATCH_SIZE) {
-      const batch = symbolList.slice(i, i + BATCH_SIZE);
-      
-      const batchResults = await Promise.allSettled(
-        batch.map(symbol => fetchStockWithRetry(symbol))
-      );
-      
-      const batchValid = batchResults
-        .filter(result => result.status === 'fulfilled')
-        .map(result => result.value);
-      
-      results.push(...batchValid);
-      
-      // Add delay between batches (except for the last batch)
-      if (i + BATCH_SIZE < symbolList.length) {
-        await delay(DELAY_BETWEEN_BATCHES);
+        throw err;
       }
     }
-    
-    res.json({ data: results });
+    res.status(503).json({ data: [], error: 'Service temporarily unavailable' });
   } catch (error) {
     console.error('Error in getStocksData:', error);
     res.status(500).json({ data: [], error: error.message });

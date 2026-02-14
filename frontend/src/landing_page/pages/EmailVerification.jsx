@@ -26,11 +26,14 @@ const EmailVerification = () => {
     const emailParam = searchParams.get('email');
     if (emailParam) {
       setEmail(emailParam);
+      console.log("[Verify] Email from URL:", emailParam);
     } else {
-      // Try to get email from localStorage
       const storedEmail = localStorage.getItem('verificationEmail');
       if (storedEmail) {
         setEmail(storedEmail);
+        console.log("[Verify] Email from localStorage:", storedEmail);
+      } else {
+        console.warn("[Verify] No email found in URL or localStorage");
       }
     }
   }, [location]);
@@ -78,16 +81,22 @@ const EmailVerification = () => {
   // Resend verification code
   const handleResendCode = async () => {
     if (isResending || timer > 0) return;
+    if (!email || !email.trim()) {
+      setErrorMsg("Email address is required to resend the code. Please go back to signup.");
+      return;
+    }
     
     setIsResending(true);
     setErrorMsg("");
     setSuccessMsg("");
     
     try {
+      console.log("[Verify] Resend code request, email:", email);
       const res = await axios.post(`${API_URL}/api/users/send-verification-code`, {
         email
       });
-      
+      console.log("[Verify] Resend response:", res.data);
+
       if (res.data.success) {
         setSuccessMsg("Verification code sent successfully!");
         setTimer(60); // 60 seconds cooldown
@@ -95,6 +104,7 @@ const EmailVerification = () => {
         setErrorMsg(res.data.message || "Failed to resend verification code");
       }
     } catch (err) {
+      console.error("[Verify] Resend failed:", err.response?.data || err.message);
       setErrorMsg(err.response?.data?.message || "Failed to resend verification code");
     } finally {
       setIsResending(false);

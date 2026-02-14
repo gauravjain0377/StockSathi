@@ -47,7 +47,7 @@ const Signup = () => {
         password: form.password
       });
 
-      console.log("📥 Registration Response:", res.data);
+      console.log("[Signup] Response:", res.data);
 
       if (res.data.success) {
         console.log("🔐 Storing auth data:", {
@@ -97,10 +97,10 @@ const Signup = () => {
         
         // Redirect to email verification page
         setTimeout(() => {
-          // Store email in localStorage for verification page
           localStorage.setItem('verificationEmail', form.email);
-          // Redirect to email verification page
-          window.location.href = `/verify-email?email=${encodeURIComponent(form.email)}`;
+          const verifyUrl = `/verify-email?email=${encodeURIComponent(form.email)}`;
+          console.log("[Signup] Redirecting to verify, email:", form.email);
+          window.location.href = verifyUrl;
         }, 2000);
       } else {
         setErrorMsg(res.data.message || "Registration failed. Please try again.");
