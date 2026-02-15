@@ -3,6 +3,7 @@ const YahooFinance = require('yahoo-finance2').default;
 const yahooFinance = new YahooFinance();
 yahooFinance._notices.suppress(['yahooSurvey']);
 const CompanyInfo = require('../model/CompanyInfoModel');
+const stockCache = require('../services/stockCache');
 
 exports.getStocks = async (req, res, next) => {
   try {
@@ -31,10 +32,29 @@ exports.getStockBySymbol = async (req, res, next) => {
   }
 };
 
+const CHUNK_SIZE = 12;
+const DELAY_BETWEEN_CHUNKS_MS = 3000;
+
+function mapQuoteToGetStocksDataItem(data) {
+  if (!data || data.regularMarketPrice == null) return { symbol: (data?.symbol || '').replace('.NS', ''), error: 'No data' };
+  const previousClose = data.regularMarketPreviousClose || 0;
+  const baseSymbol = (data.symbol || '').replace('.NS', '');
+  return {
+    symbol: baseSymbol,
+    name: data.shortName,
+    price: data.regularMarketPrice,
+    percentChange: data.regularMarketChangePercent,
+    previousClose: previousClose || null,
+    lowerCircuit: previousClose ? Number((previousClose * 0.95).toFixed(2)) : null,
+    upperCircuit: previousClose ? Number((previousClose * 1.05).toFixed(2)) : null,
+    volume: data.regularMarketVolume,
+    marketCap: data.marketCap || null,
+  };
+}
+
 exports.getStocksData = async (req, res) => {
   try {
     const symbols = req.query.symbols;
-    console.log('Fetching stock data for symbols:', symbols);
     if (!symbols) {
       return res.status(400).json({ data: [], error: 'No symbols provided' });
     }
@@ -42,41 +62,62 @@ exports.getStocksData = async (req, res) => {
     if (symbolList.length === 0) {
       return res.json({ data: [] });
     }
-    // Normalize to Yahoo symbols (.NS for Indian stocks)
-    const yfSymbols = symbolList.map(s => /\.(NS|BSE)$/i.test(s) ? s : s + '.NS');
-    const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-    const maxRetries = 2;
-    const baseDelay = 3000;
+
+    // Prefer cache to avoid hitting Yahoo on every page load
+    const cached = stockCache.getCachedDataForSymbols(symbolList);
+    if (cached && cached.hasAll) {
+      const data = cached.results.map(s => ({
+        symbol: s.symbol,
+        name: s.name,
+        price: s.price,
+        percentChange: s.percentChange ?? null,
+        previousClose: s.previousClose ?? null,
+        lowerCircuit: s.lowerCircuit ?? null,
+        upperCircuit: s.upperCircuit ?? null,
+        volume: s.volume ?? null,
+        marketCap: s.marketCap ?? null,
+      }));
+      return res.json({ data });
+    }
+    let symbolsToFetch = symbolList;
+    let mergedFromCache = [];
+    if (cached && cached.results.length > 0) {
+      const haveSet = new Set(cached.results.map(s => s.symbol.toUpperCase()));
+      const missing = symbolList.filter(s => !haveSet.has(s.replace(/\.(NS|BSE)$/i, '').toUpperCase()));
+      if (missing.length === 0) {
+        return res.json({ data: cached.results.map(s => ({ symbol: s.symbol, name: s.name, price: s.price, percentChange: s.percentChange ?? null, previousClose: s.previousClose ?? null, lowerCircuit: s.lowerCircuit ?? null, upperCircuit: s.upperCircuit ?? null, volume: s.volume ?? null, marketCap: s.marketCap ?? null })) });
+      }
+      symbolsToFetch = missing;
+      mergedFromCache = cached.results.map(s => ({ symbol: s.symbol, name: s.name, price: s.price, percentChange: s.percentChange ?? null, previousClose: s.previousClose ?? null, lowerCircuit: s.lowerCircuit ?? null, upperCircuit: s.upperCircuit ?? null, volume: s.volume ?? null, marketCap: s.marketCap ?? null }));
+    }
+
+    const yfSymbols = symbolsToFetch.map(s => /\.(NS|BSE)$/i.test(s) ? s : s + '.NS');
+    const delayMs = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+    const maxRetries = 3;
+    const baseDelay = 8000;
+
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
-        // Single batch request for all symbols - avoids Yahoo 429 rate limit
-        const quoteResults = await yahooFinance.quote(yfSymbols, { return: 'array' });
-        if (!quoteResults || !Array.isArray(quoteResults)) {
-          throw new Error('Invalid quote response');
+        const results = [];
+        for (let i = 0; i < yfSymbols.length; i += CHUNK_SIZE) {
+          const chunk = yfSymbols.slice(i, i + CHUNK_SIZE);
+          const quoteResults = await yahooFinance.quote(chunk, { return: 'array' });
+          if (quoteResults && Array.isArray(quoteResults)) {
+            results.push(...quoteResults.map(mapQuoteToGetStocksDataItem));
+          }
+          if (i + CHUNK_SIZE < yfSymbols.length) {
+            await delayMs(DELAY_BETWEEN_CHUNKS_MS);
+          }
         }
-        const results = quoteResults.map((data) => {
-          if (!data || data.regularMarketPrice == null) return { symbol: data?.symbol?.replace('.NS', '') || '', error: 'No data' };
-          const previousClose = data.regularMarketPreviousClose || 0;
-          const baseSymbol = (data.symbol || '').replace('.NS', '');
-          return {
-            symbol: baseSymbol,
-            name: data.shortName,
-            price: data.regularMarketPrice,
-            percentChange: data.regularMarketChangePercent,
-            previousClose: previousClose || null,
-            lowerCircuit: previousClose ? Number((previousClose * 0.95).toFixed(2)) : null,
-            upperCircuit: previousClose ? Number((previousClose * 1.05).toFixed(2)) : null,
-            volume: data.regularMarketVolume,
-            marketCap: data.marketCap || null,
-          };
-        });
-        return res.json({ data: results });
+        const order = new Map(symbolList.map((s, i) => [s.replace(/\.(NS|BSE)$/i, '').toUpperCase(), i]));
+        const combined = [...mergedFromCache, ...results].sort((a, b) => (order.get((a.symbol || '').toUpperCase()) ?? 999) - (order.get((b.symbol || '').toUpperCase()) ?? 999));
+        return res.json({ data: combined });
       } catch (err) {
         const isRateLimit = err.message?.includes('429') || err.message?.includes('Too Many Requests') || err.message?.includes('crumb') || err.status === 429 || err.code === 429;
         if (isRateLimit && attempt < maxRetries) {
-          const backoff = baseDelay * Math.pow(2, attempt - 1) + Math.random() * 1000;
-          console.warn(`getStocksData rate limit, retrying in ${Math.round(backoff)}ms`);
-          await delay(backoff);
+          const backoff = baseDelay * Math.pow(2, attempt - 1) + Math.random() * 2000;
+          console.warn(`getStocksData rate limit, retrying in ${Math.round(backoff / 1000)}s`);
+          await delayMs(backoff);
           continue;
         }
         throw err;

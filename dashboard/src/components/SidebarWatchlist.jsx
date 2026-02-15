@@ -54,6 +54,33 @@ const SidebarWatchlist = () => {
     fetchCompanyInfo();
   }, []);
 
+  // Load stock list from REST immediately so sidebar never stays on "Loading stocks..." (live updates come via WebSocket)
+  useEffect(() => {
+    let isMounted = true;
+    const loadStocksFromRest = async () => {
+      try {
+        const allStocks = await stockService.getAllStocks();
+        if (!isMounted) return;
+        if (Array.isArray(allStocks) && allStocks.length > 0) {
+          const processedStocks = allStocks.map(stock => ({
+            symbol: stock.symbol || 'UNKNOWN',
+            price: stock.price ?? 0,
+            percent: stock.percent ?? 0,
+            volume: stock.volume ?? '-',
+            previousClose: stock.previousClose ?? (stock.price ? stock.price * (1 + (stock.percent || 0) / 100) : 0),
+            name: stock.name || stock.fullName || stock.symbol || 'Unknown Stock',
+          }));
+          setStocks(processedStocks);
+          setLoading(false);
+        }
+      } catch (err) {
+        if (isMounted) setLoading(false);
+      }
+    };
+    loadStocksFromRest();
+    return () => { isMounted = false; };
+  }, []);
+
   // WebSocket connection setup
   useEffect(() => {
     console.log('Setting up WebSocket connection...');

@@ -21,7 +21,9 @@ const { HoldingsModel } = require("./model/HoldingsModel");
 const { PositionsModel } = require("./model/PositionsModel");
 const { OrdersModel } = require("./model/OrdersModel");
 const { UserModel } = require("./model/UserModel");
+const Stock = require("./model/StockModel");
 const stockRoutes = require('./routes/stockRoutes');
+const stockCache = require('./services/stockCache');
 
 const PORT = process.env.PORT || 3000;
 const uri = process.env.MONGO_URL || "mongodb://localhost:27017/test";
@@ -1842,8 +1844,46 @@ const stockSymbols = [
   '^NSEI', '^BSESN' // Add NIFTY 50 and SENSEX
 ];
 
+const CHUNK_SIZE = 10;
+const DELAY_BETWEEN_CHUNKS_MS = 1500;
+const FETCH_INTERVAL_MS = 120000;
+const INITIAL_FETCH_DELAY_MS = 5000;
+
 let currentStockData = new Map();
 let connectedClients = 0;
+
+// Seed currentStockData from DB so dashboard shows list immediately (live prices stream in later)
+async function seedCurrentStockDataFromDB() {
+  try {
+    const stocks = await Stock.find().lean();
+    if (!stocks.length) return [];
+    const mapped = stocks.map((s) => {
+      const prevClose = s.price && typeof s.percent === 'number' ? s.price / (1 + s.percent / 100) : null;
+      return {
+        symbol: s.symbol,
+        name: s.fullName,
+        price: s.price,
+        percentChange: s.percent,
+        previousClose: prevClose,
+        lowerCircuit: prevClose ? Number((prevClose * 0.95).toFixed(2)) : null,
+        upperCircuit: prevClose ? Number((prevClose * 1.05).toFixed(2)) : null,
+        volume: s.volume,
+        marketCap: s.marketCap,
+        lastUpdate: new Date().toISOString(),
+      };
+    });
+    mapped.forEach((s) => currentStockData.set(s.symbol, s));
+    stockCache.setCache(Array.from(currentStockData.values()));
+    if (io && connectedClients > 0) {
+      io.emit('bulkStockUpdate', mapped);
+    }
+    console.log(`📦 Seeded ${mapped.length} stocks from DB`);
+    return mapped;
+  } catch (err) {
+    console.error('seedCurrentStockDataFromDB error:', err.message);
+    return [];
+  }
+}
 
 // Helper function to delay execution
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
@@ -1875,32 +1915,83 @@ function mapQuoteToStock(data) {
   };
 }
 
-// Fetch live stock data using ONE batch request (avoids Yahoo 429 rate limit)
+// Twelve Data fallback when Yahoo returns 429 (rate limit)
+const TWELVE_DATA_DELAY_MS = 1500;
+const TWELVE_DATA_MAX_SYMBOLS = 30;
+
+async function fetchLiveStockDataTwelveDataFallback() {
+  const apiKey = process.env.TWELVE_DATA_API_KEY;
+  if (!apiKey) return 0;
+  const nseSymbols = stockSymbols.filter(s => !s.startsWith('^'));
+  const toFetch = nseSymbols.slice(0, TWELVE_DATA_MAX_SYMBOLS);
+  const allValid = [];
+  for (let i = 0; i < toFetch.length; i++) {
+    const yfSym = toFetch[i];
+    const baseSymbol = yfSym.replace('.NS', '');
+    const price = await getLivePrice(baseSymbol);
+    if (price != null && !Number.isNaN(price)) {
+      const stock = {
+        symbol: baseSymbol,
+        name: baseSymbol,
+        price,
+        change: null,
+        percentChange: null,
+        previousClose: null,
+        lowerCircuit: null,
+        upperCircuit: null,
+        volume: null,
+        marketCap: null,
+        lastUpdate: new Date().toISOString()
+      };
+      currentStockData.set(baseSymbol, stock);
+      allValid.push(stock);
+    }
+    if (i < toFetch.length - 1) await delay(TWELVE_DATA_DELAY_MS);
+  }
+  if (allValid.length > 0) {
+    stockCache.setCache(Array.from(currentStockData.values()));
+    io.emit('bulkStockUpdate', allValid);
+    console.log(`📡 Twelve Data fallback: updated ${allValid.length} stocks at ${new Date().toLocaleTimeString()}`);
+  }
+  return allValid.length;
+}
+
+// Fetch live stock data in chunks of 10 with delay to avoid Yahoo 429; emit after each chunk so UI updates fast
 async function fetchLiveStockData() {
+  // If no data yet, seed from DB so dashboard shows list immediately
+  if (currentStockData.size === 0) {
+    const seeded = await seedCurrentStockDataFromDB();
+    if (seeded.length > 0 && io && connectedClients > 0) {
+      io.emit('bulkStockUpdate', seeded);
+    }
+  }
+
   const maxRetries = 3;
-  const baseDelay = 5000; // 5s initial backoff for rate limit
+  const baseDelay = 8000;
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      console.log(`Fetching live stock data for ${stockSymbols.length} symbols (attempt ${attempt}/${maxRetries})`);
-      // Single HTTP request for all symbols - avoids "Failed to get crumb" 429 from Yahoo
-      const results = await yahooFinance.quote(stockSymbols, { return: 'array' });
-      if (!results || !Array.isArray(results)) {
-        throw new Error('Invalid quote response');
+      console.log(`Fetching live stock data for ${stockSymbols.length} symbols in chunks of ${CHUNK_SIZE} (attempt ${attempt}/${maxRetries})`);
+      for (let i = 0; i < stockSymbols.length; i += CHUNK_SIZE) {
+        const chunk = stockSymbols.slice(i, i + CHUNK_SIZE);
+        const results = await yahooFinance.quote(chunk, { return: 'array' });
+        if (results && Array.isArray(results)) {
+          const valid = results.map(mapQuoteToStock).filter(Boolean);
+          valid.forEach((stock) => {
+            currentStockData.set(stock.symbol, stock);
+          });
+          if (valid.length > 0) {
+            stockCache.setCache(Array.from(currentStockData.values()));
+            const allNow = Array.from(currentStockData.values());
+            io.emit('bulkStockUpdate', allNow);
+            console.log(`✅ Chunk ${Math.floor(i / CHUNK_SIZE) + 1}: updated ${valid.length} stocks (${allNow.length} total)`);
+          }
+        }
+        if (i + CHUNK_SIZE < stockSymbols.length) {
+          await delay(DELAY_BETWEEN_CHUNKS_MS);
+        }
       }
-      const validResults = results.map(mapQuoteToStock).filter(Boolean);
-
-      // Update current data and emit changes
-      if (validResults.length > 0) {
-        validResults.forEach(stock => {
-          currentStockData.set(stock.symbol, stock);
-          io.emit('stockUpdate', stock);
-        });
-        io.emit('bulkStockUpdate', validResults);
-        console.log(`✅ Updated ${validResults.length}/${stockSymbols.length} stocks at ${new Date().toLocaleTimeString()}`);
-        return;
-      }
-      console.warn('⚠️  No valid results in quote response');
+      return;
     } catch (error) {
       const isRateLimit = error.message?.includes('429') ||
                          error.message?.includes('Too Many Requests') ||
@@ -1909,16 +2000,27 @@ async function fetchLiveStockData() {
                          error.code === 429;
       if (isRateLimit && attempt < maxRetries) {
         const backoffDelay = baseDelay * Math.pow(2, attempt - 1) + Math.random() * 2000;
-        console.warn(`Rate limit (429) on batch request, retrying in ${Math.round(backoffDelay)}ms (attempt ${attempt}/${maxRetries})`);
+        console.warn(`Rate limit (429) on fetch, retrying in ${Math.round(backoffDelay / 1000)}s (attempt ${attempt}/${maxRetries})`);
         await delay(backoffDelay);
         continue;
       }
       console.error('❌ Error in fetchLiveStockData:', error.message);
+      // Ensure clients have DB data when Yahoo keeps failing
+      if (currentStockData.size === 0) {
+        await seedCurrentStockDataFromDB();
+        if (currentStockData.size > 0 && io && connectedClients > 0) {
+          io.emit('bulkStockUpdate', Array.from(currentStockData.values()));
+        }
+      }
       break;
     }
   }
 
-  // No new data: emit cached data if available
+  // Yahoo failed: try Twelve Data fallback if API key is set
+  const fallbackCount = await fetchLiveStockDataTwelveDataFallback();
+  if (fallbackCount > 0) return;
+
+  // No new data: emit cached/DB data if available
   if (currentStockData.size > 0) {
     const fallbackData = Array.from(currentStockData.values());
     io.emit('bulkStockUpdate', fallbackData);
@@ -1938,10 +2040,14 @@ io.on('connection', (socket) => {
     transport: socket.conn.transport.name
   });
   
-  // Send current data to newly connected client
+  // Send current data to newly connected client (seed from DB if empty so dashboard never stuck)
   if (currentStockData.size > 0) {
     const allStocks = Array.from(currentStockData.values());
     socket.emit('initialStockData', allStocks);
+  } else {
+    seedCurrentStockDataFromDB().then((data) => {
+      if (data.length > 0) socket.emit('initialStockData', data);
+    });
   }
 
   socket.on('disconnect', (reason) => {
@@ -1972,11 +2078,9 @@ server.on('clientError', (error, socket) => {
   socket.end('HTTP/1.1 400 Bad Request\r\n\r\n');
 });
 
-// One batch request per cycle - 60s interval to stay under Yahoo's rate limit
-setInterval(fetchLiveStockData, 60000);
-
-// Initial data fetch
-fetchLiveStockData();
+// 2 min interval to stay under Yahoo's rate limit; delayed start to avoid 429 on startup
+setInterval(fetchLiveStockData, FETCH_INTERVAL_MS);
+setTimeout(() => fetchLiveStockData(), INITIAL_FETCH_DELAY_MS);
 
 server.listen(PORT, () => {
   console.log(`Server started on port ${PORT}!`);

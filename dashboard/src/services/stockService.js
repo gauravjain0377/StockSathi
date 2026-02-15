@@ -93,8 +93,8 @@ export const stockService = {
       console.log('StockService: Fetching stocks from:', url);
       
       const data = await fetchWithErrorHandling(url);
-      // Handle new response structure
-      const stocks = (data.success === true ? data.stocks || data.data : []) || [];
+      // Backend may return raw array (res.json(stocks)) or object { success, stocks/data }
+      const stocks = Array.isArray(data) ? data : (data?.stocks || data?.data || []);
       
       // If backend returns empty or insufficient data, use fallback
       if (stocks.length === 0 || stocks.length < 50) {
